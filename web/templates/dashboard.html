@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PyTorch Training Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            color: #f8fafc;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.25rem;
+            border: 1px solid #334155;
+        }
+        .card-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #94a3b8;
+            margin-bottom: 0.5rem;
+        }
+        .card-value {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: #f8fafc;
+        }
+        .status-idle { color: #94a3b8; }
+        .status-training { color: #38bdf8; }
+        .status-completed { color: #4ade80; }
+
+        .progress-bar-container {
+            background: #334155;
+            border-radius: 8px;
+            height: 8px;
+            margin-top: 0.75rem;
+            overflow: hidden;
+        }
+        .progress-bar {
+            background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+            height: 100%;
+            border-radius: 8px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .chart-container {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.25rem;
+            border: 1px solid #334155;
+            margin-bottom: 1.5rem;
+        }
+        .chart-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #cbd5e1;
+        }
+        canvas { width: 100% !important; }
+
+        .history-table {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.25rem;
+            border: 1px solid #334155;
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+        th {
+            text-align: left;
+            padding: 0.5rem 1rem;
+            color: #94a3b8;
+            font-weight: 500;
+            border-bottom: 1px solid #334155;
+        }
+        td {
+            padding: 0.5rem 1rem;
+            border-bottom: 1px solid #1e293b;
+            color: #cbd5e1;
+        }
+        tr:hover td { background: #334155; }
+
+        .pulse {
+            display: inline-block;
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        .pulse-idle { background: #64748b; }
+        .pulse-training { background: #38bdf8; animation: pulse 1.5s infinite; }
+        .pulse-completed { background: #4ade80; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+    </style>
+</head>
+<body>
+    <h1>PyTorch Training Dashboard</h1>
+
+    <div class="grid">
+        <div class="card">
+            <div class="card-label">Status</div>
+            <div class="card-value" id="status">
+                <span class="pulse pulse-idle" id="pulse"></span>
+                <span id="status-text">Idle</span>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-label">Model</div>
+            <div class="card-value" id="model-name">--</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Epoch</div>
+            <div class="card-value">
+                <span id="epoch">0</span> / <span id="total-epochs">0</span>
+            </div>
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="progress-bar"></div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-label">Train Loss</div>
+            <div class="card-value" id="train-loss">--</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Test Loss</div>
+            <div class="card-value" id="test-loss">--</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Test Accuracy</div>
+            <div class="card-value" id="test-accuracy">--</div>
+        </div>
+    </div>
+
+    <div class="chart-container">
+        <div class="chart-title">Loss Over Epochs</div>
+        <canvas id="loss-chart" height="200"></canvas>
+    </div>
+
+    <div class="history-table">
+        <div class="chart-title">Epoch History</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Epoch</th>
+                    <th>Train Loss</th>
+                    <th>Test Loss</th>
+                    <th>Accuracy</th>
+                </tr>
+            </thead>
+            <tbody id="history-body"></tbody>
+        </table>
+    </div>
+
+    <script>
+        // Simple canvas chart (no external dependencies)
+        function drawChart(canvas, history) {
+            const ctx = canvas.getContext('2d');
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            ctx.scale(dpr, dpr);
+            const W = rect.width, H = rect.height;
+
+            ctx.clearRect(0, 0, W, H);
+            if (history.length < 2) {
+                ctx.fillStyle = '#64748b';
+                ctx.font = '14px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('Waiting for data...', W / 2, H / 2);
+                return;
+            }
+
+            const pad = { top: 20, right: 20, bottom: 30, left: 60 };
+            const cW = W - pad.left - pad.right;
+            const cH = H - pad.top - pad.bottom;
+
+            const trainLosses = history.map(h => h.train_loss);
+            const testLosses = history.map(h => h.test_loss);
+            const allVals = [...trainLosses, ...testLosses];
+            const maxVal = Math.max(...allVals) * 1.1;
+            const minVal = Math.min(0, Math.min(...allVals));
+
+            function x(i) { return pad.left + (i / (history.length - 1)) * cW; }
+            function y(v) { return pad.top + cH - ((v - minVal) / (maxVal - minVal)) * cH; }
+
+            // Grid lines
+            ctx.strokeStyle = '#334155';
+            ctx.lineWidth = 0.5;
+            for (let i = 0; i <= 4; i++) {
+                const yPos = pad.top + (i / 4) * cH;
+                ctx.beginPath(); ctx.moveTo(pad.left, yPos); ctx.lineTo(W - pad.right, yPos); ctx.stroke();
+                const val = maxVal - (i / 4) * (maxVal - minVal);
+                ctx.fillStyle = '#64748b'; ctx.font = '11px sans-serif'; ctx.textAlign = 'right';
+                ctx.fillText(val.toFixed(4), pad.left - 8, yPos + 4);
+            }
+
+            // Epoch labels
+            ctx.fillStyle = '#64748b'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+            history.forEach((h, i) => {
+                if (history.length <= 20 || i % Math.ceil(history.length / 10) === 0) {
+                    ctx.fillText(h.epoch, x(i), H - 8);
+                }
+            });
+
+            // Draw lines
+            function drawLine(data, color) {
+                ctx.strokeStyle = color; ctx.lineWidth = 2;
+                ctx.beginPath();
+                data.forEach((v, i) => { i === 0 ? ctx.moveTo(x(i), y(v)) : ctx.lineTo(x(i), y(v)); });
+                ctx.stroke();
+                // Dots
+                data.forEach((v, i) => {
+                    ctx.fillStyle = color;
+                    ctx.beginPath(); ctx.arc(x(i), y(v), 3, 0, Math.PI * 2); ctx.fill();
+                });
+            }
+
+            drawLine(trainLosses, '#3b82f6');
+            drawLine(testLosses, '#f97316');
+
+            // Legend
+            ctx.font = '12px sans-serif';
+            ctx.fillStyle = '#3b82f6'; ctx.fillRect(W - 160, 8, 12, 12);
+            ctx.fillStyle = '#cbd5e1'; ctx.textAlign = 'left'; ctx.fillText('Train Loss', W - 144, 19);
+            ctx.fillStyle = '#f97316'; ctx.fillRect(W - 80, 8, 12, 12);
+            ctx.fillStyle = '#cbd5e1'; ctx.fillText('Test Loss', W - 64, 19);
+        }
+
+        function updateDashboard(data) {
+            const statusText = document.getElementById('status-text');
+            const pulse = document.getElementById('pulse');
+            statusText.textContent = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+            pulse.className = 'pulse pulse-' + data.status;
+            statusText.className = 'status-' + data.status;
+
+            document.getElementById('model-name').textContent = data.model_name || '--';
+            document.getElementById('epoch').textContent = data.current_epoch;
+            document.getElementById('total-epochs').textContent = data.total_epochs;
+
+            const pct = data.total_epochs > 0 ? (data.current_epoch / data.total_epochs) * 100 : 0;
+            document.getElementById('progress-bar').style.width = pct + '%';
+
+            document.getElementById('train-loss').textContent =
+                data.status !== 'idle' ? data.train_loss.toFixed(4) : '--';
+            document.getElementById('test-loss').textContent =
+                data.status !== 'idle' ? data.test_loss.toFixed(4) : '--';
+            document.getElementById('test-accuracy').textContent =
+                data.test_accuracy !== null ? (data.test_accuracy * 100).toFixed(2) + '%' : '--';
+
+            // Chart
+            drawChart(document.getElementById('loss-chart'), data.history);
+
+            // Table
+            const tbody = document.getElementById('history-body');
+            tbody.innerHTML = data.history.map(h => `
+                <tr>
+                    <td>${h.epoch}</td>
+                    <td>${h.train_loss.toFixed(4)}</td>
+                    <td>${h.test_loss.toFixed(4)}</td>
+                    <td>${h.accuracy !== null && h.accuracy !== undefined ? (h.accuracy * 100).toFixed(2) + '%' : '--'}</td>
+                </tr>
+            `).join('');
+        }
+
+        // Poll every second
+        setInterval(() => {
+            fetch('/api/status')
+                .then(r => r.json())
+                .then(updateDashboard)
+                .catch(() => {});
+        }, 1000);
+
+        // Initial fetch
+        fetch('/api/status').then(r => r.json()).then(updateDashboard).catch(() => {});
+    </script>
+</body>
+</html>
